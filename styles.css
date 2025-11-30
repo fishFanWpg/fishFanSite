@@ -1,0 +1,19 @@
+/* css styles */
+@import url('https://fonts.googleapis.com/css2?family=Rye&display=swap');
+
+.navbar-brand {
+  display: flex;
+  font-family: 'Rye', Arial;
+  font-size: 5rem;
+  align-items: center !important;
+  
+  
+}
+.navbar-logo {
+  max-height: 100px;
+  width: auto;
+  margin-right: 19px;
+  
+}
+ 
+ 

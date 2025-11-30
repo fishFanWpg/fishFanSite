@@ -1,0 +1,339 @@
+---
+title: "About"
+format: html
+---
+
+About this site
+
+```{r}
+library(tidyverse)
+library(geosphere)
+
+may_schedule <- read.csv("MAY_AA_SCHEDULE.csv")
+head(may_schedule, 20)
+schedule_clean <- may_schedule %>%
+  select(Date, Home_Team, Away_Team) %>%
+  filter(!is.na(Home_Team) & !is.na(Away_Team)) %>%
+  mutate(Date = na_if(Date, "")) %>%
+  fill(Date, .direction = "down")
+
+head(schedule_clean, 20)
+ballparks <- read.csv("ballparks.csv")
+head(ballparks)
+first_game <- schedule_clean[1,]
+second_game <- schedule_clean[2,]
+print(first_game)
+print(second_game)
+home_info <- ballparks %>% filter(nickname == first_game$Home_Team)
+away_info <- ballparks %>% filter(nickname == first_game$Away_Team)
+print(away_info)
+print(home_info)
+
+
+# Distance calculation function
+calc_distance <- function(lat1, lon1, lat2, lon2) {
+  distHaversine(c(lon1, lat1), c(lon2, lat2)) / 1609.34  # converts to miles
+}
+
+# Get coordinates
+home_lat <- home_info$lat
+home_lon <- home_info$lon
+away_lat <- away_info$lat
+away_lon <- away_info$lon
+
+# Calculate distance
+distance <- calc_distance(away_lat, away_lon, home_lat, home_lon)
+print(paste("Distance from CLE to FM:", round(distance, 0), "miles"))
+# Sort by away team and date
+schedule_sorted <- schedule_clean %>%
+  arrange(Away_Team, Date)
+
+# Add a column that shows if they're in a new city
+schedule_with_travel <- schedule_sorted %>%
+  group_by(Away_Team) %>%
+  mutate(
+    prev_city = lag(Home_Team),  # Where they played last game
+    new_trip = (Home_Team != prev_city) | is.na(prev_city)  # TRUE if new city
+  ) %>%
+  ungroup()
+
+# Look at this
+schedule_with_travel %>%
+  select(Date, Away_Team, Home_Team, prev_city, new_trip) %>%
+  head(20)
+# Clean up extra spaces in team names
+schedule_clean <- schedule_clean %>%
+  mutate(
+    Home_Team = str_trim(Home_Team),
+    Away_Team = str_trim(Away_Team)
+  )
+
+# Now redo the travel detection
+schedule_sorted <- schedule_clean %>%
+  arrange(Away_Team, Date)
+
+schedule_with_travel <- schedule_sorted %>%
+  group_by(Away_Team) %>%
+  mutate(
+    prev_city = lag(Home_Team),
+    new_trip = (Home_Team != prev_city) | is.na(prev_city)
+  ) %>%
+  ungroup()
+
+# Check again
+schedule_with_travel %>%
+  select(Date, Away_Team, Home_Team, prev_city, new_trip) %>%
+  filter(Away_Team == "CLE") %>%
+  head(10)
+# Join with coordinates
+schedule_with_coords <- schedule_with_travel %>%
+  left_join(ballparks %>% select(nickname, home_lat = lat, home_lon = lon), 
+            by = c("Home_Team" = "nickname")) %>%
+  left_join(ballparks %>% select(nickname, away_lat = lat, away_lon = lon), 
+            by = c("Away_Team" = "nickname"))
+
+# Calculate distance only for NEW trips
+schedule_final <- schedule_with_coords %>%
+  rowwise() %>%
+  mutate(
+    miles = if_else(new_trip, 
+                    calc_distance(away_lat, away_lon, home_lat, home_lon),
+                    0)  # 0 miles if staying in same city
+  ) %>%
+  ungroup()
+
+# Show results
+schedule_final %>%
+  select(Date, Away_Team, Home_Team, new_trip, miles) %>%
+  print(n = 100)
+  
+# Total miles by team
+# team_travel_summary <- schedule_final %>%
+#   group_by(Away_Team) %>%
+#   summarise(
+#     total_miles = round(sum(miles), 0),
+#     num_trips = sum(new_trip),
+#     total_games = n()
+#   ) %>%
+#   arrange(desc(total_miles))
+# 
+# team_travel_summary
+
+calculate_team_travel <- function(team_abbr) {
+  team_games <- schedule_clean %>%
+    filter(Home_Team == team_abbr | Away_Team == team_abbr) %>%
+    arrange(Date) %>%
+    mutate(
+      is_home = (Home_Team == team_abbr),
+      location = if_else(is_home, Home_Team, Home_Team)
+    )
+  current_location <- team_abbr
+  total_miles <- 0
+  trips <-list()
+  
+  for(i in 1:nrow(team_games)) {
+    game <- team_games[i,]
+    
+    if(game$is_home) {
+      # Home game - where are they coming from?
+      if(current_location != team_abbr) {
+        # Travel home
+        from_coords <- ballparks %>% filter(nickname == current_location)
+        to_coords <- ballparks %>% filter(nickname == team_abbr)
+        miles <- calc_distance(from_coords$lat, from_coords$lon, 
+                              to_coords$lat, to_coords$lon)
+        total_miles <- total_miles + miles
+        trips[[length(trips) + 1]] <- list(
+          from = current_location, 
+          to = team_abbr, 
+          miles = round(miles, 0),
+          date = game$Date
+        )
+        current_location <- team_abbr
+      }
+    } else {
+      # Away game - are they already there?
+      away_location <- game$Home_Team
+      if(current_location != away_location) {
+        # Travel to away city
+        from_coords <- ballparks %>% filter(nickname == current_location)
+        to_coords <- ballparks %>% filter(nickname == away_location)
+        miles <- calc_distance(from_coords$lat, from_coords$lon,
+                              to_coords$lat, to_coords$lon)
+        total_miles <- total_miles + miles
+        trips[[length(trips) + 1]] <- list(
+          from = current_location,
+          to = away_location,
+          miles = round(miles, 0),
+          date = game$Date
+        )
+        current_location <- away_location
+      }
+    }
+  }
+  
+  list(
+    team = team_abbr,
+    total_miles = round(total_miles, 0),
+    num_trips = length(trips),
+    ending_location = current_location,
+    trips = trips
+  )
+}
+
+# Test with Winnipeg
+wpg_travel <- calculate_team_travel("WPG")
+print(wpg_travel) 
+# Show all WPG games in order
+wpg_games <- schedule_clean %>%
+  filter(Home_Team == "WPG" | Away_Team == "WPG") %>%
+  arrange(Date) %>%
+  mutate(
+    is_home = (Home_Team == "WPG"),
+    opponent = if_else(is_home, Away_Team, Home_Team),
+    venue = if_else(is_home, "HOME", "AWAY")
+  ) %>%
+  select(Date, venue, opponent)
+
+print(wpg_games)
+# Debug: Show raw schedule data for WPG
+schedule_clean %>%
+  filter(Home_Team == "WPG" | Away_Team == "WPG") %>%
+  arrange(Date) %>%
+  select(Date, Home_Team, Away_Team) %>%
+  head(10)
+schedule_clean %>%
+  filter(Home_Team == "WPG" | Away_Team == "WPG") %>%
+  arrange(Date) %>%
+  select(Date, Home_Team, Away_Team) %>%
+  head(5)
+schedule_clean <- read.csv("MAY_AA_SCHEDULE.csv") %>%
+  mutate(
+    Home_Team = str_trim(Home_Team),
+    Away_Team = str_trim(Away_Team),
+    Date = na_if(Date, "")
+  ) %>%
+  fill(Date, .direction = "down") %>%
+  filter(!is.na(Home_Team) & !is.na(Away_Team))
+
+# Check WPG now
+schedule_clean %>%
+  filter(Home_Team == "WPG" | Away_Team == "WPG") %>%
+  arrange(Date) %>%
+  select(Date, Home_Team, Away_Team) 
+schedule_sorted <- schedule_clean %>%
+  arrange(Away_Team, Date)
+
+schedule_with_travel <- schedule_sorted %>%
+  group_by(Away_Team) %>%
+  mutate(
+    prev_city = lag(Home_Team),
+    new_trip = (Home_Team != prev_city) | is.na(prev_city)
+  ) %>%
+  ungroup()
+
+# Join with coordinates and calculate
+schedule_with_coords <- schedule_with_travel %>%
+  left_join(ballparks %>% select(nickname, home_lat = lat, home_lon = lon), 
+            by = c("Home_Team" = "nickname")) %>%
+  left_join(ballparks %>% select(nickname, away_lat = lat, away_lon = lon), 
+            by = c("Away_Team" = "nickname"))
+
+schedule_final <- schedule_with_coords %>%
+  rowwise() %>%
+  mutate(
+    miles = if_else(new_trip, 
+                    calc_distance(away_lat, away_lon, home_lat, home_lon),
+                    0)
+  ) %>%
+  ungroup()
+
+# WPG's travel
+schedule_final %>%
+  filter(Away_Team == "WPG") %>%
+  select(Date, Away_Team, Home_Team, new_trip, miles)
+# For each team, track their location game-by-game
+calculate_all_travel <- function() {
+  
+  teams <- unique(c(schedule_clean$Home_Team, schedule_clean$Away_Team))
+  all_travel <- list()
+  
+  for(team in teams) {
+    # Get all games for this team
+    team_games <- schedule_clean %>%
+      filter(Home_Team == team | Away_Team == team) %>%
+      arrange(Date) %>%
+      mutate(
+        location = if_else(Home_Team == team, team, Home_Team),
+        is_home = (Home_Team == team)
+      )
+    
+    # Start at home
+    current_location <- team
+    trips <- list()
+    
+    for(i in 1:nrow(team_games)) {
+      next_location <- team_games$location[i]
+      
+      # Did they move?
+      if(current_location != next_location) {
+        from_coords <- ballparks %>% filter(nickname == current_location)
+        to_coords <- ballparks %>% filter(nickname == next_location)
+        
+        miles <- calc_distance(
+          from_coords$lat, from_coords$lon,
+          to_coords$lat, to_coords$lon
+        )
+        
+        trips[[length(trips) + 1]] <- tibble(
+          team = team,
+          date = team_games$Date[i],
+          from = current_location,
+          to = next_location,
+          miles = round(miles, 0)
+        )
+        
+        current_location <- next_location
+      }
+    }
+    
+    if(length(trips) > 0) {
+      all_travel[[team]] <- bind_rows(trips)
+    }
+  }
+  
+  bind_rows(all_travel)
+}
+
+# Calculate for all teams
+all_trips <- calculate_all_travel()
+
+# Show WPG's trips
+all_trips %>%
+  filter(team == "WPG")
+all_trips %>%
+  filter(team == "FM")
+# Summary by team
+team_summary <- all_trips %>%
+  group_by(team) %>%
+  summarise(
+    total_miles = sum(miles),
+    num_trips = n(),
+    ending_location = last(to)
+  ) %>%
+  arrange(desc(total_miles))
+
+team_summary
+
+all_trips
+  
+
+
+ 
+ 
+   
+ 
+
+ 
+ 
+```

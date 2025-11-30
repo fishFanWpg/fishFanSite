@@ -1,0 +1,77 @@
+---
+title: "American Association"
+format: 
+  html:
+    code-fold: true
+    toc: true
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(geosphere)
+library(plotly)
+library(DT)  # For interactive tables
+library(leaflet)  # For better maps
+
+# install.packages(c("DT", "leaflet")) if needed
+```
+## Ballpark Map {.tabset}
+```{r map, echo=FALSE, message=FALSE, warning=FALSE}
+ballparks <- read.csv("ballparks.csv")
+leaflet(ballparks, height = 600) %>%
+  addTiles() %>%
+  addMarkers(
+    lng = ~lon,
+    lat = ~lat,
+    label = ~Team
+   ) %>%
+  setView(lng = -95, lat = 42, zoom = 5)  
+```
+## Ballpark Locations
+```{r table, echo=FALSE}
+ballparks %>%
+  select(Team = Team, City = City, State = State, 
+         Latitude = lat, Longitude = lon) %>%
+  datatable(
+    options = list(pageLength = 12, dom = 'none'),
+    rownames = FALSE,
+    class = 'cell-border stripe'
+  )
+```
+## Distance Between Ballparks
+
+
+```{r distances, echo=FALSE, message=FALSE, warning=FALSE}
+# Calculate distances
+calc_distance <- function(lat1, lon1, lat2, lon2) {
+  distHaversine(c(lon1, lat1), c(lon2, lat2)) / 1609.34
+}
+teams <- ballparks$nickname
+n <- nrow(ballparks)
+distance_matrix <- matrix(0, n, n)
+rownames(distance_matrix) <- teams
+colnames(distance_matrix) <- teams
+
+for(i in 1:n) {
+  for(j in 1:n) {
+    if(i != j) {
+      distance_matrix[i,j] <- round(calc_distance(
+        ballparks$lat[i], ballparks$lon[i],
+        ballparks$lat[j], ballparks$lon[j]
+      ), 0)
+    }
+  }
+}
+
+datatable(distance_matrix, options = list(
+  pageLength = 12,
+  dom = 't'
+  
+))
+```
+
+ 
+ 
+
+ 
